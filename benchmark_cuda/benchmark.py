@@ -19,6 +19,7 @@ parser.add_argument('-r', '--runs', type=int, default=1)
 parser.add_argument('--scale', choices=['s', 'ms', 'us'], default='us')
 parser.add_argument('-c', '--cuda', action='store_true')
 parser.add_argument('-d', '--double', action='store_true')
+parser.add_argument('-s', '--parallel_size', type=int, default=1)
 options = parser.parse_args()
 
 # THIS IF NEEDS A COMPLETE REWORK
@@ -34,7 +35,7 @@ elif options.example == 'ff-cuda':
     from ff_cuda.ff import FF
     options.cuda = True # hardcoded override of the arg flag -- you can't do CUDA on a CPU
 elif options.example == 'fff-cuda':
-    from fff_cuda.fff import FFF
+    from fff_cuda_folder.fff import FFF
     options.cuda = True # hardcoded override of the arg flag -- you can't do CUDA on a CPU
 else:
     raise ValueError('Unknown example: {}'.format(options.example))
@@ -49,7 +50,7 @@ X = torch.randn(options.batch_size, options.input_width, **kwargs)
 if options.example.startswith('ff-'):
     fff = FF(options.input_width, options.hidden_width, options.input_width).to(device, dtype)
 else:
-    fff = FFF(options.input_width, options.input_width, options.depth).to(device, dtype)
+    fff = FFF(options.input_width, options.input_width, options.depth, options.parallel_size).to(device, dtype)
 
 outputs = fff(X)
 
