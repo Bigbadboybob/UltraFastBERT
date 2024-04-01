@@ -3,7 +3,7 @@ from torch import nn
 from torch.autograd import Function
 import torch
 
-import fff_cuda
+import fff_cudaOG
 
 torch.manual_seed(42)
 
@@ -48,7 +48,7 @@ class FFFFunction(Function):
 		x = oldx.reshape(-1, width)
 		# x has shape (batch_size, width)
 
-		new_logits = fff_cuda.forward(x, in_weight, in_bias, out_weight, width, depth, parallel_size, n_nodes)
+		new_logits = fff_cudaOG.forward(x, in_weight, in_bias, out_weight, width, depth, parallel_size, n_nodes)
 
 		ret = new_logits.reshape_as(oldx)
 		return ret

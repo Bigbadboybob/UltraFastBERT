@@ -22,61 +22,34 @@ __global__ void fff_cuda_forward_kernel(
     const unsigned int depth,
     const unsigned int n_nodes
   ) {
-  extern __shared__ char cache_raw[]; // Raw shared memory space
-  scalar_t* cache = reinterpret_cast<scalar_t*>(cache_raw); // Cast to desired type when used
-
-
   // compute which row of inputs we're dealing with
-  const int cache_index = threadIdx.x;
-  const int tid = blockIdx.x * blockDim.x + threadIdx.x;
-  const int batch = blockIdx.y;
+  const int row_index = blockIdx.x * blockDim.x + threadIdx.x;
 
   // zero the output
-  int vid = tid;
-  while (vid < width) {
-    output[batch][vid] = 0;
-    vid += blockDim.x;
+  for (int i = 0; i < width; ++i) {
+    output[row_index][i] = 0;
   }
 
-  int current_node = 0;
-  for (int current_depth = 0; current_depth <= depth; ++current_depth) {
+  if (row_index < x.size(0)) {
+    int current_node = 0;
+    for (int current_depth = 0; current_depth <= depth; ++current_depth) {
+        scalar_t acc = 0;
+        for (int i = 0; i < width;++i) {
+            acc += x[row_index][i] * in_weight[current_node][i];
+        }
+        acc += in_bias[current_node];
 
-    // compute 1024 accumulations (one for each thread)
-    scalar_t temp = 0;
-    vid = tid;
-    cache[cache_index] = 0; //TODO: remove this
-    while (vid < width) {
-      temp += x[batch][vid] * in_weight[current_node][vid];
-      vid += blockDim.x;
-    }
-    cache[cache_index] = temp;
-    __syncthreads();
+        // compute the activation
+        scalar_t activation = gelu(acc);
 
-    // reduce the accumulations into a single value
-    for (int i = blockDim.x / 2; i > 0; i >>= 1) {
-      if (cache_index < i) {
-        cache[cache_index] += cache[cache_index + i];
-      }
-      __syncthreads();
-    }
-    
-    //bias and activation
-    if (cache_index == 0) {
-      cache[0] += in_bias[current_node];
-      cache[1] = gelu(cache[0]);
-    }
-    __syncthreads();
+        // compute the output contribution due to the current node
+        for (int i = 0; i < width; ++i) {
+            output[row_index][i] += activation * out_weight[current_node][i];
+        }
 
-    // compute the output contribution due to the current node
-    vid = tid;
-    while(vid < width) {
-      output[batch][vid] += cache[1] * out_weight[current_node][vid];
-      vid += blockDim.x;
+        // decide where to move to
+        current_node = (current_node<<1) + 1 + (acc > 0 ? 1 : 0);
     }
-    __syncthreads(); //TODO: remove this
-
-    // decide where to move to
-    current_node = (current_node<<1) + 1 + (cache[0] > 0 ? 1 : 0);
   }
 }
 } // namespace
@@ -100,20 +73,12 @@ torch::Tensor fff_cuda_forward(
   );
 
   const int batch_size = x.size(0);
-  //blockx adds extra level of parallelism combining accumulations across blocks
-  //each thread does N/(threads*blockx) accumulations
-  //after this there will be blockx accumulations left to do
-  //TODO: need to implement this so keep as 1 for now
-  const int blockx = 1; //tuneable 
-  //blah
-  const int blocky = batch_size;
 
   const int threads = 1024;
-  const dim3 blocks = dim3(blockx, blocky);
-  const int shared_size = threads * sizeof(double);
+  const int blocks = (batch_size + threads - 1) / threads;
 
   AT_DISPATCH_FLOATING_TYPES(in_weight.type(), "fff_forward_cuda", ([&] {
-    fff_cuda_forward_kernel<scalar_t><<<blocks, threads, shared_size>>>(
+    fff_cuda_forward_kernel<scalar_t><<<blocks, threads>>>(
         output.packed_accessor<scalar_t,2,torch::RestrictPtrTraits,size_t>(),
         x.packed_accessor<scalar_t,2,torch::RestrictPtrTraits,size_t>(),
         in_weight.packed_accessor<scalar_t,2,torch::RestrictPtrTraits,size_t>(),

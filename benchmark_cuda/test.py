@@ -36,6 +36,7 @@ elif options.example == 'ff-cuda':
     options.cuda = True # hardcoded override of the arg flag -- you can't do CUDA on a CPU
 elif options.example == 'fff-cuda':
     from fff_cuda_folder.fff import FFF
+    from fff_cuda_folderOG.fff import FFF as FFFOG
     options.cuda = True # hardcoded override of the arg flag -- you can't do CUDA on a CPU
 else:
     raise ValueError('Unknown example: {}'.format(options.example))
@@ -51,21 +52,48 @@ if options.example.startswith('ff-'):
     fff = FF(options.input_width, options.hidden_width, options.input_width).to(device, dtype)
 else:
     fff = FFF(options.input_width, options.input_width, options.depth, options.parallel_size).to(device, dtype)
+    fffOG = FFFOG(options.input_width, options.input_width, options.depth, options.parallel_size).to(device, dtype)
+
+for param_tensor_ff, param_tensor_ffOG in zip(fff.parameters(), fffOG.parameters()):
+    param_tensor_ff.data = param_tensor_ffOG.data.clone()
 
 outputs = fff(X)
+outputsOG = fffOG(X)
 
 forward_min = math.inf
 forward_time = 0
 backward_min = math.inf
 backward_time = 0
-for _ in range(options.runs):
-    X = torch.randn(options.batch_size, options.input_width, **kwargs)
 
-    start = time.time()
-    outputs = fff(X)
-    elapsed = time.time() - start
-    forward_min = min(forward_min, elapsed)
-    forward_time += elapsed
+forward_minOG = math.inf
+forward_timeOG = 0
+backward_minOG = math.inf
+backward_timeOG = 0
+fff.eval()
+fffOG.eval()
+with torch.no_grad():
+    for i in range(options.runs):
+        for param_tensor_ff, param_tensor_ffOG in zip(fff.parameters(), fffOG.parameters()):
+            param_tensor_ff.data = param_tensor_ffOG.data.clone()
+        X = torch.randn(options.batch_size, options.input_width, **kwargs)
+        #X = torch.ones(options.batch_size, options.input_width, **kwargs)*(options.runs-i)
+        X_copy = X.clone()
+
+        start = time.time()
+        outputs = fff(X)
+        elapsed = time.time() - start
+        print('Outputs: ', outputs)
+        forward_min = min(forward_min, elapsed)
+        forward_time += elapsed
+
+        startOG = time.time()
+        outputsOG = fffOG(X_copy)
+        elapsedOG = time.time() - startOG
+        print('OutputsOG: ', outputsOG)
+        forward_minOG = min(forward_minOG, elapsedOG)
+        forward_timeOG += elapsedOG
+        percent_diff = (torch.abs(outputs - outputsOG) / torch.abs(outputsOG)).mean()
+        print('Percent diff: ', percent_diff)
 
 #TODO: check for correctness
 
@@ -75,6 +103,17 @@ backward_min *= scale
 forward_average = forward_time / options.runs * scale
 backward_average = backward_time / options.runs * scale
 
+forward_minOG *= scale
+backward_minOG *= scale
+forward_averageOG = forward_timeOG / options.runs * scale
+backward_averageOG = backward_timeOG / options.runs * scale
+
 print('Forward: {0:.3f}/{1:.3f} {4} | Backward {2:.3f}/{3:.3f} {4}'.format(
     forward_min, forward_average, backward_min, backward_average,
     options.scale))
+
+print('OG: Forward: {0:.3f}/{1:.3f} {4} | Backward {2:.3f}/{3:.3f} {4}'.format(
+    forward_minOG, forward_averageOG, backward_minOG, backward_averageOG,
+    options.scale))
+
+print('Speedup: {0:.3f}x'.format(forward_averageOG / forward_average))

@@ -31,20 +31,12 @@ __global__ void fff_cuda_forward_kernel(
   const int tid = blockIdx.x * blockDim.x + threadIdx.x;
   const int batch = blockIdx.y;
 
-  // zero the output
-  int vid = tid;
-  while (vid < width) {
-    output[batch][vid] = 0;
-    vid += blockDim.x;
-  }
-
   int current_node = 0;
   for (int current_depth = 0; current_depth <= depth; ++current_depth) {
 
     // compute 1024 accumulations (one for each thread)
     scalar_t temp = 0;
-    vid = tid;
-    cache[cache_index] = 0; //TODO: remove this
+    int vid = tid;
     while (vid < width) {
       temp += x[batch][vid] * in_weight[current_node][vid];
       vid += blockDim.x;
@@ -73,7 +65,6 @@ __global__ void fff_cuda_forward_kernel(
       output[batch][vid] += cache[1] * out_weight[current_node][vid];
       vid += blockDim.x;
     }
-    __syncthreads(); //TODO: remove this
 
     // decide where to move to
     current_node = (current_node<<1) + 1 + (cache[0] > 0 ? 1 : 0);
@@ -103,14 +94,12 @@ torch::Tensor fff_cuda_forward(
   //blockx adds extra level of parallelism combining accumulations across blocks
   //each thread does N/(threads*blockx) accumulations
   //after this there will be blockx accumulations left to do
-  //TODO: need to implement this so keep as 1 for now
   const int blockx = 1; //tuneable 
-  //blah
   const int blocky = batch_size;
 
   const int threads = 1024;
   const dim3 blocks = dim3(blockx, blocky);
-  const int shared_size = threads * sizeof(double);
+  const int shared_size = threads * sizeof(float);
 
   AT_DISPATCH_FLOATING_TYPES(in_weight.type(), "fff_forward_cuda", ([&] {
     fff_cuda_forward_kernel<scalar_t><<<blocks, threads, shared_size>>>(
